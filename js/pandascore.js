@@ -23,7 +23,8 @@ const CACHE_TTL = 20_000; // 20 s for live data
 async function fetchJSON(path, params = {}) {
   if (!_apiKey) throw new Error('PandaScore API key not configured');
 
-  const url = new URL(BASE + path, location.origin);
+  const url = new URL(BASE, location.origin);
+  url.searchParams.set('path', path);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
   }

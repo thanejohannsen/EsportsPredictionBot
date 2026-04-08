@@ -15,7 +15,7 @@ export const DEFAULTS = {
 };
 
 export const POLYMARKET = {
-  BASE: '/api/polymarket',
+  BASE: '/api/polymarket',   // → api/polymarket.js serverless function
   // Tag slugs that Polymarket uses for each game
   TAGS: {
     cs2: ['cs2', 'counter-strike', 'esports'],
@@ -39,7 +39,7 @@ export const POLYMARKET = {
 };
 
 export const PANDASCORE = {
-  BASE: '/api/pandascore',
+  BASE: '/api/pandascore',   // → api/pandascore.js serverless function
 };
 
 // ── Map metadata ────────────────────────────────────────────────────────────
