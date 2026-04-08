@@ -48,7 +48,7 @@ async function fetchJSON(path, params = {}) {
 // ── Game slug ─────────────────────────────────────────────────────────────
 
 function gameSlug(game) {
-  return game === 'lol' ? 'lol' : 'csgo';
+  return game === 'lol' ? 'lol' : 'cs2';
 }
 
 // ── Matches ───────────────────────────────────────────────────────────────
