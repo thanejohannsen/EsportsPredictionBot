@@ -10,6 +10,12 @@ export default async function handler(req, res) {
   try {
     const upstream = await fetch(url.toString());
     const body = await upstream.text();
+    try {
+      const json = JSON.parse(body);
+      const items = Array.isArray(json) ? json : (json.events ?? []);
+      console.log(`[polymarket] ${url.searchParams.get('tag_slug') ?? path} → ${items.length} events`);
+      items.slice(0, 5).forEach(e => console.log('  title:', e.title ?? e.label ?? e.slug));
+    } catch {}
     res.setHeader('Content-Type', upstream.headers.get('Content-Type') ?? 'application/json');
     res.status(upstream.status).send(body);
   } catch (err) {

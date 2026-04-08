@@ -76,7 +76,7 @@ export async function fetchGameEvents(game) {
     return keywords.some(kw => title.includes(kw));
   });
 
-  return filtered.length > 0 ? filtered : events;
+  return filtered;
 }
 
 /**
@@ -179,6 +179,13 @@ export async function getEnrichedEvents(game, minVolume = 20_000) {
   // Filter by volume and sort by volume descending
   return enriched
     .filter(ev => ev.totalVolume >= minVolume)
+    .filter(ev => {
+      // Drop events where ML team names look like garbage (single words, "the", yes/no)
+      const ml = ev.markets.find(m => m.subtype === 'ml');
+      if (!ml) return true; // keep non-ML events (tournament winners etc.)
+      const bad = (name) => !name || name.length < 2 || /^(yes|no|the)$/i.test(name.trim());
+      return !bad(ml.team1) && !bad(ml.team2);
+    })
     .sort((a, b) => b.totalVolume - a.totalVolume);
 }
 

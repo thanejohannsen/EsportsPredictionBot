@@ -18,8 +18,8 @@ export const POLYMARKET = {
   BASE: '/api/polymarket',   // → api/polymarket.js serverless function
   // Tag slugs that Polymarket uses for each game
   TAGS: {
-    cs2: ['cs2', 'counter-strike', 'esports'],
-    lol: ['lol', 'league-of-legends', 'esports'],
+    cs2: ['cs2', 'counter-strike'],
+    lol: ['lol', 'league-of-legends'],
   },
   // Keywords to detect each game in market questions / event titles
   GAME_KEYWORDS: {

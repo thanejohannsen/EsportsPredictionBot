@@ -10,10 +10,12 @@ export default async function handler(req, res) {
   const auth = req.headers['authorization'] ?? '';
 
   try {
+    console.log('[pandascore] fetching:', url.toString(), 'auth:', auth ? 'present' : 'missing');
     const upstream = await fetch(url.toString(), {
       headers: auth ? { Authorization: auth } : {},
     });
     const body = await upstream.text();
+    console.log('[pandascore] status:', upstream.status, 'body:', body.slice(0, 200));
     res.setHeader('Content-Type', upstream.headers.get('Content-Type') ?? 'application/json');
     res.status(upstream.status).send(body);
   } catch (err) {
