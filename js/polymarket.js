@@ -17,7 +17,7 @@ function cacheTTL() {
 }
 
 async function fetchJSON(path, params = {}) {
-  const url = new URL(BASE + path);
+  const url = new URL(BASE + path, location.origin);
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
   }
