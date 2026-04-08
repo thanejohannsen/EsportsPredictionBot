@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>EsportsPM — Polymarket Esports Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              cs2: '#e8a838',
+              lol: '#c89b3c',
+              cyan: '#00d4ff',
+              green: '#22d972',
+              red: '#ff4655',
+              purple: '#9d4edd',
+            },
+            surface: {
+              900: '#080c14',
+              800: '#0d1117',
+              700: '#131924',
+              600: '#1a2233',
+              500: '#243047',
+            },
+          },
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+  <style>
+    body { background-color: #080c14; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #243047; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #2d3f5c; }
+
+    /* Animations */
+    @keyframes pulse-live {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .animate-live { animation: pulse-live 1.5s ease-in-out infinite; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fadein { animation: fadeIn 0.25s ease-out forwards; }
+
+    @keyframes shimmer {
+      0% { background-position: -500px 0; }
+      100% { background-position: 500px 0; }
+    }
+    .skeleton {
+      background: linear-gradient(90deg, #131924 25%, #1a2233 50%, #131924 75%);
+      background-size: 500px 100%;
+      animation: shimmer 1.4s infinite;
+    }
+
+    /* Glass card */
+    .card {
+      background: linear-gradient(135deg, rgba(19,25,36,0.9) 0%, rgba(13,17,23,0.95) 100%);
+      border: 1px solid rgba(255,255,255,0.06);
+      backdrop-filter: blur(10px);
+    }
+    .card:hover { border-color: rgba(255,255,255,0.1); }
+
+    /* Odds bar */
+    .odds-bar-fill {
+      transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* Tab active states */
+    .game-tab.active {
+      color: #e8a838;
+      border-bottom-color: #e8a838;
+    }
+    .game-tab.active[data-game="lol"] {
+      color: #c89b3c;
+      border-bottom-color: #c89b3c;
+    }
+    .view-tab.active {
+      background: rgba(232,168,56,0.15);
+      color: #e8a838;
+    }
+
+    /* Team win badge colors */
+    .edge-strong { color: #22d972; background: rgba(34,217,114,0.12); border: 1px solid rgba(34,217,114,0.3); }
+    .edge-slight { color: #a3e635; background: rgba(163,230,53,0.1); border: 1px solid rgba(163,230,53,0.25); }
+    .edge-fair { color: #94a3b8; background: rgba(148,163,184,0.08); border: 1px solid rgba(148,163,184,0.15); }
+    .edge-negative { color: #fb923c; background: rgba(251,146,60,0.1); border: 1px solid rgba(251,146,60,0.25); }
+
+    /* Map pill */
+    .map-pick { border-left: 3px solid #22d972; }
+    .map-ban { border-left: 3px solid #ff4655; opacity: 0.6; }
+    .map-decider { border-left: 3px solid #e8a838; }
+    .map-current { border-left: 3px solid #00d4ff; }
+    .map-remaining { border-left: 3px solid #475569; opacity: 0.5; }
+
+    /* Odds formats */
+    .odds-american.positive { color: #22d972; }
+    .odds-american.negative { color: #94a3b8; }
+
+    /* Toggle */
+    .toggle-input:checked + .toggle-track { background: #e8a838; }
+    .toggle-input:checked + .toggle-track .toggle-thumb { transform: translateX(100%); }
+
+    /* Tooltip */
+    .tooltip { position: relative; }
+    .tooltip:hover .tooltip-content { display: block; }
+    .tooltip-content {
+      display: none;
+      position: absolute;
+      bottom: calc(100% + 6px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #1a2233;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      padding: 6px 10px;
+      white-space: nowrap;
+      font-size: 11px;
+      color: #94a3b8;
+      z-index: 50;
+    }
+  </style>
+</head>
+<body class="dark font-sans text-slate-100 min-h-screen">
+
+  <!-- ───── HEADER ───── -->
+  <header class="sticky top-0 z-40 border-b border-white/5" style="background: rgba(8,12,20,0.95); backdrop-filter: blur(12px);">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
+      <div class="flex items-center justify-between h-14">
+
+        <!-- Logo -->
+        <div class="flex items-center gap-2">
+          <svg class="w-7 h-7 text-brand-cs2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="9"/>
+            <circle cx="12" cy="12" r="3"/>
+            <line x1="12" y1="3" x2="12" y2="6"/>
+            <line x1="12" y1="18" x2="12" y2="21"/>
+            <line x1="3" y1="12" x2="6" y2="12"/>
+            <line x1="18" y1="12" x2="21" y2="12"/>
+          </svg>
+          <span class="font-bold text-lg tracking-tight">EsportsPM</span>
+          <span class="hidden sm:inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded text-xs font-medium bg-brand-cs2/15 text-brand-cs2">BETA</span>
+        </div>
+
+        <!-- Game tabs -->
+        <nav class="flex items-center gap-0">
+          <button class="game-tab active flex items-center gap-2 px-4 h-14 text-sm font-semibold border-b-2 border-transparent transition-colors" data-game="cs2" onclick="App.switchGame('cs2')">
+            <span class="w-4 h-4 text-base leading-none">🔫</span>
+            CS2
+          </button>
+          <button class="game-tab flex items-center gap-2 px-4 h-14 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition-colors" data-game="lol" onclick="App.switchGame('lol')">
+            <span class="text-base leading-none">⚔️</span>
+            LoL
+          </button>
+        </nav>
+
+        <!-- Actions -->
+        <div class="flex items-center gap-2">
+          <!-- Live count badge -->
+          <div id="live-badge" class="hidden items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold" style="background:rgba(255,70,85,0.15); color:#ff4655;">
+            <span class="w-1.5 h-1.5 rounded-full bg-brand-red animate-live inline-block"></span>
+            <span id="live-count">0</span> LIVE
+          </div>
+
+          <!-- Odds format toggle -->
+          <div class="hidden sm:flex items-center gap-1.5 text-xs text-slate-400">
+            <button class="odds-fmt px-2 py-1 rounded text-xs font-medium bg-surface-600 text-slate-200" data-fmt="american" onclick="App.setOddsFormat('american')">American</button>
+            <button class="odds-fmt px-2 py-1 rounded text-xs font-medium hover:bg-surface-600 text-slate-400" data-fmt="decimal" onclick="App.setOddsFormat('decimal')">Decimal</button>
+            <button class="odds-fmt px-2 py-1 rounded text-xs font-medium hover:bg-surface-600 text-slate-400" data-fmt="prob" onclick="App.setOddsFormat('prob')">%</button>
+          </div>
+
+          <!-- Refresh -->
+          <button onclick="App.refresh()" id="refresh-btn" class="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-surface-600 transition-colors" title="Refresh data">
+            <svg id="refresh-icon" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/>
+              <path d="M21 3v5h-5"/>
+              <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
+              <path d="M8 16H3v5"/>
+            </svg>
+          </button>
+
+          <!-- Settings -->
+          <button onclick="App.openSettings()" class="p-2 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-surface-600 transition-colors" title="Settings">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ───── SUB-NAV ───── -->
+  <div class="sticky top-14 z-30 border-b border-white/5" style="background: rgba(8,12,20,0.92); backdrop-filter: blur(8px);">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6">
+      <div class="flex items-center justify-between h-12">
+
+        <!-- View tabs -->
+        <div class="flex items-center gap-1">
+          <button class="view-tab active px-4 py-1.5 rounded-md text-sm font-semibold transition-all" data-view="upcoming" onclick="App.switchView('upcoming')">
+            Upcoming
+          </button>
+          <button class="view-tab px-4 py-1.5 rounded-md text-sm font-medium text-slate-400 hover:text-slate-200 transition-all" data-view="live" onclick="App.switchView('live')">
+            Live
+            <span id="live-count-tab" class="ml-1.5 hidden items-center justify-center w-4 h-4 rounded-full text-xs font-bold" style="background:#ff4655; color:white; display:none;"></span>
+          </button>
+        </div>
+
+        <!-- Filters -->
+        <div class="flex items-center gap-3">
+          <!-- Min volume filter (upcoming) -->
+          <div id="volume-filter" class="hidden sm:flex items-center gap-2 text-xs text-slate-400">
+            <span>Min Vol:</span>
+            <select id="min-volume-select" onchange="App.setMinVolume(this.value)" class="bg-surface-700 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 cursor-pointer">
+              <option value="20000">$20K</option>
+              <option value="50000">$50K</option>
+              <option value="100000">$100K</option>
+              <option value="0">Any</option>
+            </select>
+          </div>
+
+          <!-- Tournament filter -->
+          <div class="hidden sm:flex items-center gap-2 text-xs text-slate-400">
+            <span>Tournament:</span>
+            <select id="tournament-filter" onchange="App.setTournamentFilter(this.value)" class="bg-surface-700 border border-white/10 rounded px-2 py-1 text-xs text-slate-200 cursor-pointer">
+              <option value="all">All</option>
+              <option value="esl">ESL</option>
+              <option value="blast">BLAST</option>
+              <option value="pgl">PGL</option>
+              <option value="iem">IEM</option>
+            </select>
+          </div>
+
+          <!-- Last updated -->
+          <div class="flex items-center gap-1.5 text-xs text-slate-500">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            <span id="last-updated">—</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── MAIN CONTENT ───── -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+
+    <!-- Error banner -->
+    <div id="error-banner" class="hidden mb-4 flex items-center gap-3 p-4 rounded-lg border border-red-500/20 bg-red-500/5 text-sm text-red-400">
+      <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <span id="error-text"></span>
+      <button onclick="App.dismissError()" class="ml-auto text-red-400/60 hover:text-red-400">✕</button>
+    </div>
+
+    <!-- Info banner (PandaScore not configured) -->
+    <div id="info-banner" class="hidden mb-4 flex items-center gap-3 p-3 rounded-lg border border-brand-cyan/20 bg-brand-cyan/5 text-sm">
+      <svg class="w-4 h-4 text-brand-cyan flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <span class="text-slate-300">Add a free <strong class="text-brand-cyan">PandaScore API key</strong> in Settings to unlock team stats, live scores, and map veto data.</span>
+      <button onclick="App.openSettings()" class="ml-auto px-3 py-1 rounded text-xs font-semibold text-brand-cyan border border-brand-cyan/30 hover:bg-brand-cyan/10 transition-colors whitespace-nowrap">Configure</button>
+    </div>
+
+    <!-- Game cards container -->
+    <div id="cards-container" class="space-y-4"></div>
+
+    <!-- Empty state -->
+    <div id="empty-state" class="hidden flex flex-col items-center justify-center py-24 text-center">
+      <div class="w-16 h-16 rounded-2xl bg-surface-700 flex items-center justify-center mb-4">
+        <svg class="w-7 h-7 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 3h18v18H3z" opacity=".3"/><path d="M9 9h6v6H9z"/></svg>
+      </div>
+      <p class="text-slate-400 font-medium text-lg mb-1" id="empty-title">No markets found</p>
+      <p class="text-slate-500 text-sm max-w-xs" id="empty-desc">There are no active esports markets matching your filters right now. Check back soon or adjust your filters.</p>
+    </div>
+
+    <!-- Loading skeleton -->
+    <div id="loading-state" class="space-y-4">
+      <div class="card rounded-2xl p-5 h-44 skeleton"></div>
+      <div class="card rounded-2xl p-5 h-44 skeleton"></div>
+      <div class="card rounded-2xl p-5 h-44 skeleton"></div>
+    </div>
+
+  </main>
+
+  <!-- ───── SETTINGS MODAL ───── -->
+  <div id="settings-modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4" style="background:rgba(0,0,0,0.7); backdrop-filter:blur(4px);">
+    <div class="card rounded-2xl w-full max-w-md animate-fadein">
+      <div class="flex items-center justify-between p-5 border-b border-white/5">
+        <h2 class="text-base font-bold">Settings</h2>
+        <button onclick="App.closeSettings()" class="text-slate-400 hover:text-slate-200 transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="p-5 space-y-5">
+
+        <!-- PandaScore API Key -->
+        <div>
+          <label class="block text-sm font-semibold text-slate-200 mb-1">PandaScore API Key</label>
+          <p class="text-xs text-slate-500 mb-2">
+            Required for live scores, map veto data, and team stats.
+            <a href="https://pandascore.co" target="_blank" rel="noopener" class="text-brand-cyan hover:underline ml-1">Get free key →</a>
+          </p>
+          <div class="flex gap-2">
+            <input id="panda-key-input" type="password" placeholder="Paste your API key here"
+              class="flex-1 bg-surface-700 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-cyan/50 font-mono"
+            />
+            <button onclick="App.savePandaKey()" class="px-3 py-2 rounded-lg bg-brand-cyan/15 text-brand-cyan border border-brand-cyan/30 text-sm font-semibold hover:bg-brand-cyan/25 transition-colors">Save</button>
+          </div>
+          <div id="panda-key-status" class="mt-1.5 text-xs"></div>
+        </div>
+
+        <!-- Min volume -->
+        <div>
+          <label class="block text-sm font-semibold text-slate-200 mb-1">Minimum Market Volume</label>
+          <p class="text-xs text-slate-500 mb-2">Only show markets with at least this much trading volume.</p>
+          <select id="settings-min-volume" onchange="App.setMinVolume(this.value)"
+            class="w-full bg-surface-700 border border-white/10 rounded-lg px-3 py-2 text-sm text-slate-200">
+            <option value="0">No minimum</option>
+            <option value="10000">$10K</option>
+            <option value="20000" selected>$20K (recommended)</option>
+            <option value="50000">$50K</option>
+            <option value="100000">$100K</option>
+          </select>
+        </div>
+
+        <!-- Odds format -->
+        <div>
+          <label class="block text-sm font-semibold text-slate-200 mb-2">Odds Format</label>
+          <div class="flex gap-2">
+            <button class="settings-odds-btn flex-1 py-2 rounded-lg text-sm font-medium border border-white/10 bg-surface-700 hover:border-brand-cs2/40 transition-colors" data-fmt="american" onclick="App.setOddsFormat('american')">American (+150)</button>
+            <button class="settings-odds-btn flex-1 py-2 rounded-lg text-sm font-medium border border-white/10 bg-surface-700 hover:border-brand-cs2/40 transition-colors" data-fmt="decimal" onclick="App.setOddsFormat('decimal')">Decimal (2.50)</button>
+            <button class="settings-odds-btn flex-1 py-2 rounded-lg text-sm font-medium border border-white/10 bg-surface-700 hover:border-brand-cs2/40 transition-colors" data-fmt="prob" onclick="App.setOddsFormat('prob')">Probability (40%)</button>
+          </div>
+        </div>
+
+        <!-- Auto-refresh -->
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-slate-200">Auto-refresh</p>
+            <p class="text-xs text-slate-500">Reload market data every 60 seconds</p>
+          </div>
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input id="auto-refresh-toggle" type="checkbox" checked class="toggle-input sr-only" onchange="App.toggleAutoRefresh(this.checked)" />
+            <div class="toggle-track w-9 h-5 bg-surface-600 rounded-full border border-white/10 relative transition-colors">
+              <div class="toggle-thumb absolute top-0.5 left-0.5 w-4 h-4 bg-slate-300 rounded-full shadow transition-transform"></div>
+            </div>
+          </label>
+        </div>
+
+      </div>
+      <div class="px-5 pb-5">
+        <button onclick="App.closeSettings()" class="w-full py-2.5 rounded-xl bg-surface-600 text-sm font-semibold text-slate-200 hover:bg-surface-500 transition-colors">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── SCRIPTS ───── -->
+  <script type="module" src="js/config.js"></script>
+  <script type="module" src="js/polymarket.js"></script>
+  <script type="module" src="js/pandascore.js"></script>
+  <script type="module" src="js/analysis.js"></script>
+  <script type="module" src="js/app.js"></script>
+
+</body>
+</html>

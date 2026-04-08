@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/polymarket/(.*)", "destination": "/api/polymarket/$1" },
+    { "source": "/api/pandascore/(.*)",  "destination": "/api/pandascore/$1"  },
+    { "source": "/(.*)",                 "destination": "/index.html"          }
+  ]
+}
