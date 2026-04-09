@@ -29,7 +29,6 @@ let _pandaMatches = [];   // NormPandaMatch[] from PandaScore
 window.addEventListener('DOMContentLoaded', () => {
   applyConfig();
   if (cfg.pandaKey) setPandaKey(cfg.pandaKey);
-  else              showInfoBanner();
 
   App.refresh();
   scheduleAutoRefresh();
@@ -127,7 +126,6 @@ const App = {
       status.textContent = val ? '✓ Saved. Refreshing data…' : 'Key cleared.';
       status.className = val ? 'mt-1.5 text-xs text-green-400' : 'mt-1.5 text-xs text-slate-400';
     }
-    hideInfoBanner();
     App.refresh();
   },
 
@@ -710,16 +708,6 @@ function clearError() {
   const banner = document.getElementById('error-banner');
   banner.classList.add('hidden');
   banner.style.display = 'none';
-}
-
-function showInfoBanner() {
-  const b = document.getElementById('info-banner');
-  if (b) { b.classList.remove('hidden'); b.style.display = 'flex'; }
-}
-
-function hideInfoBanner() {
-  const b = document.getElementById('info-banner');
-  if (b) { b.classList.add('hidden'); b.style.display = 'none'; }
 }
 
 function setRefreshSpinner(on) {
