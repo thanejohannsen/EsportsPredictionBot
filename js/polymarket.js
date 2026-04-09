@@ -73,7 +73,8 @@ export async function fetchGameEvents(game) {
   // or be a well-known esports event title.
   const filtered = events.filter(ev => {
     const title = (ev.title ?? ev.label ?? ev.name ?? '').toLowerCase();
-    return keywords.some(kw => title.includes(kw));
+    const slug  = (ev.slug ?? '').toLowerCase();
+    return keywords.some(kw => title.includes(kw) || slug.includes(kw));
   });
 
   return filtered;
@@ -180,11 +181,12 @@ export async function getEnrichedEvents(game, minVolume = 20_000) {
   return enriched
     .filter(ev => ev.totalVolume >= minVolume)
     .filter(ev => {
-      // Drop events where ML team names look like garbage (single words, "the", yes/no)
+      // Drop events where ML team names are clearly wrong (e.g. "the", single chars)
       const ml = ev.markets.find(m => m.subtype === 'ml');
-      if (!ml) return true; // keep non-ML events (tournament winners etc.)
+      if (!ml) return true; // keep tournament winner / prop events
       const bad = (name) => !name || name.length < 2 || /^(yes|no|the)$/i.test(name.trim());
-      return !bad(ml.team1) && !bad(ml.team2);
+      if (bad(ml.team1) || bad(ml.team2)) return false;
+      return true;
     })
     .sort((a, b) => b.totalVolume - a.totalVolume);
 }
