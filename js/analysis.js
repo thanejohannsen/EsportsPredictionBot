@@ -82,53 +82,113 @@ export function formatOdds(prob, format) {
  * @param {TeamStats|null} stats2 – PandaScore stats for team 2
  * @returns {EdgeResult}
  */
-export function analyseEdge(market, stats1 = null, stats2 = null) {
+export function analyseEdge(market, profile1 = null, profile2 = null, pickedMaps = []) {
   const [rawP1, rawP2] = market.probs;
   const [fairP1, fairP2] = removeVig(rawP1, rawP2);
-
-  // Vig (overround): how much the market maker takes
   const vig = (rawP1 + rawP2) - 1;
 
-  if (stats1 && stats2 && stats1.recentWinRate !== null && stats2.recentWinRate !== null) {
-    // ── Model-based edge ──────────────────────────────────────────────────
-    // Normalise stats win rates to sum to 1 (as a relative strength ratio)
-    const total = stats1.recentWinRate + stats2.recentWinRate;
-    const modelP1 = total > 0 ? stats1.recentWinRate / total : 0.5;
-    const modelP2 = 1 - modelP1;
-
-    const edge1 = modelP1 - fairP1;   // positive → market undervaluing team 1
-    const edge2 = modelP2 - fairP2;
-
-    return buildEdgeResult(edge1, edge2, fairP1, fairP2, vig, market);
+  // Need at least one ranked team for a real model
+  if (profile1?.rank && profile2?.rank) {
+    const model = computeModelProbability(profile1, profile2, pickedMaps);
+    const edge1 = model.p1 - fairP1;
+    const edge2 = model.p2 - fairP2;
+    return buildEdgeResult(edge1, edge2, fairP1, fairP2, vig, market, {
+      hasModelData: true,
+      modelP1: model.p1,
+      modelP2: model.p2,
+      breakdown: model.breakdown,
+    });
   }
 
-  // ── Market-structure signals (no external stats) ──────────────────────
-  // Check for common market inefficiencies:
-  //  1. Low liquidity relative to volume → less efficient pricing
-  //  2. Large spread between bid/ask (if available)
-  //  3. Extreme favourite (e.g. >80%) in a low-volume market
-
-  const liquidityRatio = market.volume > 0 ? market.liquidity / market.volume : 1;
-  const isExtremeFavourite = fairP1 > 0.8 || fairP2 > 0.8;
-  const isLowLiquidity = market.liquidity < 5_000;
-
-  let edge1 = 0;
-  if (isExtremeFavourite && isLowLiquidity) {
-    // Underdog might have slight value in low-liquidity markets
-    edge1 = fairP1 > 0.8 ? 0.03 : -0.03;  // slight edge on underdog
-  }
-
-  return buildEdgeResult(edge1, -edge1, fairP1, fairP2, vig, market);
+  // No ranking data → don't fake an edge, just report Fair Market
+  return buildEdgeResult(0, 0, fairP1, fairP2, vig, market, {
+    hasModelData: false,
+    insufficientData: true,
+  });
 }
 
-function buildEdgeResult(edge1, edge2, fairP1, fairP2, vig, market) {
-  // The team with the largest positive edge is the recommended pick
+/**
+ * Derive a fair probability for team1 winning using HLTV data.
+ * Combines:
+ *   1. Elo-style rank delta (base probability)
+ *   2. Per-map win rate advantage on picked maps
+ *   3. Recent form momentum
+ *
+ * @param {object} p1 – HLTV profile for team1
+ * @param {object} p2 – HLTV profile for team2
+ * @param {string[]} pickedMaps – lowercase map slugs already picked/confirmed
+ * @returns {{p1:number, p2:number, breakdown:object}}
+ */
+export function computeModelProbability(p1, p2, pickedMaps = []) {
+  // ── 1. Rank delta (Elo-ish) ──────────────────────────────────────────
+  // Smaller rank number = better team. Use points if available for a finer signal.
+  const rank1 = p1.rank ?? 30, rank2 = p2.rank ?? 30;
+  const rankDelta = rank2 - rank1;  // positive → team1 is better
+  // 16-rank gap ≈ ~64/36 split
+  const baseP1 = 1 / (1 + Math.pow(10, -rankDelta / 16));
+
+  // ── 2. Map advantage ─────────────────────────────────────────────────
+  let mapAdjustment = 0;
+  const mapDetails = [];
+  if (pickedMaps.length) {
+    let deltaSum = 0, count = 0;
+    for (const map of pickedMaps) {
+      const wr1 = p1.mapStats?.[map]?.winRate;
+      const wr2 = p2.mapStats?.[map]?.winRate;
+      if (wr1 != null && wr2 != null) {
+        const delta = wr1 - wr2;
+        deltaSum += delta;
+        count++;
+        mapDetails.push({ map, wr1, wr2, delta });
+      }
+    }
+    if (count > 0) {
+      // Scale: a 20-point win-rate gap moves probability ~8%
+      mapAdjustment = (deltaSum / count) * 0.4;
+    }
+  }
+
+  // ── 3. Recent form adjustment ────────────────────────────────────────
+  const form1 = formWinRate(p1.recentForm);
+  const form2 = formWinRate(p2.recentForm);
+  let formAdjustment = 0;
+  if (form1 != null && form2 != null) {
+    // Scale: 20pt form gap = ±4% probability swing
+    formAdjustment = (form1 - form2) * 0.2;
+  }
+
+  // ── Combine and clamp ────────────────────────────────────────────────
+  let p1Final = baseP1 + mapAdjustment + formAdjustment;
+  p1Final = Math.max(0.05, Math.min(0.95, p1Final));
+  const p2Final = 1 - p1Final;
+
+  return {
+    p1: p1Final,
+    p2: p2Final,
+    breakdown: {
+      rank1, rank2, rankDelta, baseP1,
+      mapAdjustment, mapDetails,
+      form1, form2, formAdjustment,
+    },
+  };
+}
+
+function formWinRate(form) {
+  if (!Array.isArray(form) || form.length === 0) return null;
+  const wins = form.filter(x => x === 'W').length;
+  return wins / form.length;
+}
+
+function buildEdgeResult(edge1, edge2, fairP1, fairP2, vig, market, extras = {}) {
   const bestEdge = Math.max(edge1, edge2);
   const favouredTeam = edge1 >= edge2 ? market.team1 : market.team2;
   const favouredProb = edge1 >= edge2 ? fairP1 : fairP2;
 
   let label, cssClass;
-  if (bestEdge >= EDGE.STRONG) {
+  if (extras.insufficientData) {
+    label = 'Insufficient Data';
+    cssClass = 'edge-fair';
+  } else if (bestEdge >= EDGE.STRONG) {
     label = 'Strong Edge';
     cssClass = 'edge-strong';
   } else if (bestEdge >= EDGE.SLIGHT) {
@@ -153,7 +213,11 @@ function buildEdgeResult(edge1, edge2, fairP1, fairP2, vig, market) {
     fairP1,
     fairP2,
     vig,
-    hasModelData: false,
+    hasModelData: extras.hasModelData ?? false,
+    modelP1: extras.modelP1 ?? null,
+    modelP2: extras.modelP2 ?? null,
+    breakdown: extras.breakdown ?? null,
+    insufficientData: extras.insufficientData ?? false,
   };
 }
 

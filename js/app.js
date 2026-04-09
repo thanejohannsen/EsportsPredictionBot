@@ -11,6 +11,7 @@ import {
   removeVig, formatOdds, formatVolume, formatDate, timeUntil,
   toAmerican, toDecimal, toPercent,
 } from './analysis.js';
+import { fetchWorldRanking, getTeamProfile } from './hltv.js';
 
 // ── State ─────────────────────────────────────────────────────────────────
 
@@ -220,6 +221,9 @@ async function loadData(silent = false) {
       if (ev) ev.pandaMatch = panda;
     }
 
+    // Enrich with HLTV data (rankings, map stats, form)
+    await enrichEventsWithHLTV(_polyEvents);
+
     updateLastUpdated();
     clearError();
   } catch (err) {
@@ -230,6 +234,46 @@ async function loadData(silent = false) {
     if (!silent) showLoading(false);
     setRefreshSpinner(false);
   }
+}
+
+// ── HLTV Enrichment ──────────────────────────────────────────────────────────
+
+let _hltvRankingCache = null;
+let _hltvRankingTs = 0;
+const _hltvProfileCache = new Map(); // teamName → profile
+
+async function enrichEventsWithHLTV(events) {
+  if (cfg.game !== 'cs2') return; // HLTV is CS-only
+  try {
+    // Fetch ranking once per hour
+    if (!_hltvRankingCache || (Date.now() - _hltvRankingTs) > 60 * 60 * 1000) {
+      _hltvRankingCache = await fetchWorldRanking();
+      _hltvRankingTs = Date.now();
+    }
+    const ranking = _hltvRankingCache;
+    if (!ranking || ranking.length === 0) return;
+
+    // For each event with an ML market, resolve both team profiles
+    const jobs = [];
+    for (const ev of events) {
+      const ml = ev.markets?.find(m => m.subtype === 'ml');
+      if (!ml) continue;
+      jobs.push(resolveProfile(ml.team1, ranking).then(p => ev._profile1 = p));
+      jobs.push(resolveProfile(ml.team2, ranking).then(p => ev._profile2 = p));
+    }
+    await Promise.all(jobs);
+    console.log(`[hltv] enriched ${events.filter(e => e._profile1?.rank || e._profile2?.rank).length} events with ranked teams`);
+  } catch (err) {
+    console.warn('[hltv] enrichment failed:', err.message);
+  }
+}
+
+async function resolveProfile(name, ranking) {
+  if (!name) return null;
+  if (_hltvProfileCache.has(name)) return _hltvProfileCache.get(name);
+  const profile = await getTeamProfile(name, ranking);
+  _hltvProfileCache.set(name, profile);
+  return profile;
 }
 
 // ── Rendering ─────────────────────────────────────────────────────────────
@@ -310,7 +354,10 @@ function renderUpcomingCard(ev) {
 
   const [rawP1, rawP2] = ml.probs;
   const [fp1, fp2] = removeVig(rawP1, rawP2);
-  const edge = analyseEdge(ml, null, null);
+
+  // Picked maps from title/slug if we can spot them (simple heuristic)
+  const pickedMaps = extractPickedMaps(ev);
+  const edge = analyseEdge(ml, ev._profile1, ev._profile2, pickedMaps);
 
   const t1Name = ml.team1;
   const t2Name = ml.team2;
@@ -372,6 +419,8 @@ function renderUpcomingCard(ev) {
     <!-- Pick recommendation -->
     ${renderPickRecommendation(edge, t1Name, t2Name, fp1, fp2)}
 
+    ${renderEdgePanel(edge, ev, t1Name, t2Name)}
+
   </div>
 
   <!-- Sub-markets row (Map 1, total maps, etc.) -->
@@ -406,6 +455,10 @@ function renderLiveCard(ev) {
 
   const t1Name = ml.team1;
   const t2Name = ml.team2;
+
+  // Model edge from HLTV data
+  const pickedMaps = extractPickedMaps(ev);
+  const edge = analyseEdge(ml, ev._profile1, ev._profile2, pickedMaps);
 
   // Map veto / game progress from PandaScore (if key provided)
   const veto = panda ? buildVetoFromPanda(panda) : [];
@@ -507,6 +560,9 @@ function renderLiveCard(ev) {
 
     <!-- Map analysis note -->
     ${renderMapAnalysisNote(mapAnalysis, t1Name, t2Name)}
+
+    <!-- Model vs Market edge panel -->
+    ${renderEdgePanel(edge, ev, t1Name, t2Name)}
   </div>
 
   <!-- Additional sub-markets -->
@@ -736,6 +792,111 @@ function updateLiveBadge(count) {
     if (badge) { badge.classList.add('hidden'); }
     if (tabCountEl) tabCountEl.style.display = 'none';
   }
+}
+
+// ── Edge panel + map extraction ───────────────────────────────────────────
+
+const KNOWN_CS2_MAPS = ['mirage','inferno','nuke','ancient','anubis','dust2','vertigo','overpass','train','cache'];
+
+function extractPickedMaps(ev) {
+  const haystack = `${ev.title ?? ''} ${ev.slug ?? ''}`.toLowerCase();
+  const found = [];
+  for (const m of KNOWN_CS2_MAPS) {
+    if (haystack.includes(m)) found.push(m);
+  }
+  // Also pull from map markets (e.g. "Map 1 Winner: Mirage")
+  for (const mkt of ev.markets ?? []) {
+    const q = (mkt.question ?? '').toLowerCase();
+    for (const m of KNOWN_CS2_MAPS) {
+      if (q.includes(m) && !found.includes(m)) found.push(m);
+    }
+  }
+  return found;
+}
+
+function renderEdgePanel(edge, ev, t1Name, t2Name) {
+  if (!edge.hasModelData) {
+    if (edge.insufficientData) {
+      return `<div class="mt-3 p-3 rounded-lg text-xs text-slate-500 italic" style="background:rgba(255,255,255,0.02);">
+        Not enough HLTV data to build a model for this match (one or both teams unranked).
+      </div>`;
+    }
+    return '';
+  }
+
+  const p1 = ev._profile1;
+  const p2 = ev._profile2;
+  const bd = edge.breakdown;
+  const modelP1Pct = Math.round(edge.modelP1 * 100);
+  const modelP2Pct = Math.round(edge.modelP2 * 100);
+  const marketP1Pct = Math.round(edge.fairP1 * 100);
+  const marketP2Pct = Math.round(edge.fairP2 * 100);
+  const edgePct = Math.round(edge.bestEdge * 100);
+  const edgeColor = edge.bestEdge >= 0.07 ? '#22d972'
+                 : edge.bestEdge >= 0.03 ? '#00d4ff'
+                 : edge.bestEdge <= -0.07 ? '#ff4655'
+                 : '#94a3b8';
+
+  const formLine = (form) => {
+    if (!form?.length) return '<span class="text-slate-500">—</span>';
+    return form.slice(0, 10).map(r => `<span class="inline-block w-4 h-4 text-center text-[10px] font-bold rounded ${r === 'W' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}">${r}</span>`).join(' ');
+  };
+
+  const mapLines = (bd.mapDetails ?? []).map(md => {
+    const pct1 = Math.round(md.wr1 * 100);
+    const pct2 = Math.round(md.wr2 * 100);
+    const winner = md.wr1 > md.wr2 ? t1Name : t2Name;
+    return `<div class="flex items-center justify-between text-xs">
+      <span class="text-slate-400 capitalize">${escHtml(md.map)}</span>
+      <span class="font-mono"><span class="${md.wr1 > md.wr2 ? 'text-green-400' : 'text-slate-400'}">${pct1}%</span> - <span class="${md.wr2 > md.wr1 ? 'text-green-400' : 'text-slate-400'}">${pct2}%</span></span>
+      <span class="text-slate-500 text-[10px]">${escHtml(winner.split(' ')[0])} ↑</span>
+    </div>`;
+  }).join('');
+
+  return `
+<div class="mt-3 p-4 rounded-xl border border-white/5" style="background:rgba(0,212,255,0.04);">
+  <div class="flex items-center justify-between mb-3">
+    <div class="text-xs font-bold text-brand-cyan uppercase tracking-wider">Model vs Market</div>
+    <div class="text-xs font-mono" style="color:${edgeColor};">
+      ${edgePct > 0 ? '+' : ''}${edgePct}% on ${escHtml(edge.favouredTeam.split(' ')[0])}
+    </div>
+  </div>
+
+  <!-- Model vs Market probability bar -->
+  <div class="grid grid-cols-2 gap-3 mb-4">
+    <div class="text-center">
+      <div class="text-[10px] text-slate-500 uppercase font-semibold mb-1">${escHtml(t1Name.split(' ')[0])}</div>
+      <div class="font-mono text-xs"><span class="text-brand-cyan font-bold">${modelP1Pct}%</span> <span class="text-slate-500">vs</span> <span class="text-slate-300">${marketP1Pct}%</span></div>
+      <div class="text-[10px] text-slate-500 mt-0.5">model / market</div>
+    </div>
+    <div class="text-center">
+      <div class="text-[10px] text-slate-500 uppercase font-semibold mb-1">${escHtml(t2Name.split(' ')[0])}</div>
+      <div class="font-mono text-xs"><span class="text-brand-cyan font-bold">${modelP2Pct}%</span> <span class="text-slate-500">vs</span> <span class="text-slate-300">${marketP2Pct}%</span></div>
+      <div class="text-[10px] text-slate-500 mt-0.5">model / market</div>
+    </div>
+  </div>
+
+  <!-- Rank row -->
+  <div class="flex items-center justify-between text-xs mb-2 pb-2 border-b border-white/5">
+    <div><span class="text-slate-500">HLTV Rank:</span> <span class="font-mono text-slate-200">#${p1.rank ?? '—'}</span></div>
+    <div class="text-slate-500 text-[10px]">Δ ${bd.rankDelta > 0 ? '+' : ''}${bd.rankDelta}</div>
+    <div><span class="text-slate-500">HLTV Rank:</span> <span class="font-mono text-slate-200">#${p2.rank ?? '—'}</span></div>
+  </div>
+
+  <!-- Form row -->
+  <div class="flex items-center justify-between text-xs mb-2 pb-2 border-b border-white/5">
+    <div class="flex items-center gap-1">${formLine(p1.recentForm)}</div>
+    <div class="text-slate-500 text-[10px]">last 10</div>
+    <div class="flex items-center gap-1">${formLine(p2.recentForm)}</div>
+  </div>
+
+  <!-- Map breakdown -->
+  ${mapLines ? `
+  <div class="space-y-1 pt-1">
+    <div class="text-[10px] text-slate-500 uppercase font-semibold mb-1">Map Win Rates</div>
+    ${mapLines}
+  </div>` : ''}
+</div>`;
 }
 
 // ── Security ──────────────────────────────────────────────────────────────
