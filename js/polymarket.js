@@ -46,36 +46,51 @@ export async function fetchGameEvents(game) {
   const tagSlugs = POLYMARKET.TAGS[game] ?? ['esports'];
   const keywords = POLYMARKET.GAME_KEYWORDS[game] ?? [];
 
-  const results = await Promise.allSettled(
-    tagSlugs.map(slug =>
-      fetchJSON('/events', {
+  // Fetch multiple pages per tag so we get ALL events, not just the first 100.
+  async function fetchAllForTag(slug) {
+    const all = [];
+    for (let offset = 0; offset < 1000; offset += 500) {
+      const batch = await fetchJSON('/events', {
         tag_slug: slug,
         closed: 'false',
-        limit: 100,
-      })
-    )
-  );
+        active: 'true',
+        limit: 500,
+        offset,
+        order: 'startDate',
+        ascending: 'true',
+      });
+      const arr = Array.isArray(batch) ? batch : (batch?.events ?? []);
+      all.push(...arr);
+      if (arr.length < 500) break;
+    }
+    return all;
+  }
+
+  const results = await Promise.allSettled(tagSlugs.map(fetchAllForTag));
 
   const seen = new Set();
   const events = [];
-
   for (const r of results) {
     if (r.status !== 'fulfilled') continue;
-    const arr = Array.isArray(r.value) ? r.value : (r.value?.events ?? []);
-    for (const ev of arr) {
+    for (const ev of r.value) {
       if (seen.has(ev.id)) continue;
       seen.add(ev.id);
       events.push(ev);
     }
   }
 
-  // Filter: must mention at least one game keyword in title (unless tag slug was game-specific)
-  // or be a well-known esports event title.
+  console.log(`[polymarket] fetched ${events.length} total events across tags:`, tagSlugs);
+
+  // Filter: slug or title must contain a game keyword
   const filtered = events.filter(ev => {
     const title = (ev.title ?? ev.label ?? ev.name ?? '').toLowerCase();
     const slug  = (ev.slug ?? '').toLowerCase();
     return keywords.some(kw => title.includes(kw) || slug.includes(kw));
   });
+
+  console.log(`[polymarket] ${filtered.length} events matched ${game} keywords`);
+
+  console.log(`[polymarket] ${filtered.filter(e => e.live).length} events have live=true`);
 
   return filtered;
 }
@@ -158,37 +173,70 @@ export function inferSeriesScore(markets, team1, team2) {
 export async function getEnrichedEvents(game, minVolume = 20_000) {
   const events = await fetchGameEvents(game);
 
-  const enriched = await Promise.all(
-    events.map(async ev => {
-      let markets = [];
-      try {
-        markets = await fetchEventMarkets(ev.id);
-      } catch {
-        // Use markets embedded in the event object if the separate call fails
-        markets = ev.markets ?? [];
-      }
+  const enriched = events.map(ev => {
+    // Use markets embedded in the event response directly.
+    // The /markets?event_id=X endpoint returns garbage for Polymarket's API.
+    const rawMarkets = Array.isArray(ev.markets) ? ev.markets : [];
+    const normMarkets = rawMarkets
+      .map(m => normaliseMarket(m))
+      .filter(m => m !== null);
+    return normaliseEvent(ev, normMarkets);
+  });
 
-      // Normalise each market into a consistent schema
-      const normMarkets = markets
-        .map(m => normaliseMarket(m))
-        .filter(m => m !== null);
+  const liveEnriched = enriched.filter(e => e.live);
+  console.log(`[polymarket] ${game}: ${events.length} events → ${enriched.length} enriched, ${liveEnriched.length} live`);
+  liveEnriched.forEach(e => console.log('  enriched LIVE:', { title: e.title, live: e.live, closed: e.closed, ended: e.ended }));
 
-      return normaliseEvent(ev, normMarkets);
-    })
-  );
-
-  // Filter by volume and sort by volume descending
+  // Filter: volume, not-resolved, and startDate not far in the past
+  const now = Date.now();
+  const SIX_HOURS = 6 * 3_600_000;
   return enriched
-    .filter(ev => ev.totalVolume >= minVolume)
+    .filter(ev => ev.live || ev.totalVolume >= minVolume)
     .filter(ev => {
-      // Drop events where ML team names are clearly wrong (e.g. "the", single chars)
+      if (ev.closed || ev.ended) return false;
       const ml = ev.markets.find(m => m.subtype === 'ml');
-      if (!ml) return true; // keep tournament winner / prop events
-      const bad = (name) => !name || name.length < 2 || /^(yes|no|the)$/i.test(name.trim());
-      if (bad(ml.team1) || bad(ml.team2)) return false;
+      if (!ml) return true;
+      if (ml.closed) return false;
+      const [p0, p1] = ml.probs;
+      if (p0 >= 0.99 || p1 >= 0.99) return false;
       return true;
     })
-    .sort((a, b) => b.totalVolume - a.totalVolume);
+    .filter(ev => {
+      // Always keep live events regardless of date
+      if (ev.live) return true;
+      // Drop events whose start time is more than 6 hours in the past
+      if (!ev.startDate) return true;
+      const start = new Date(ev.startDate).getTime();
+      return (now - start) < SIX_HOURS;
+    })
+    .sort((a, b) => {
+      // Sort by startDate ascending (soonest first), then by volume
+      const da = a.startDate ? new Date(a.startDate).getTime() : Infinity;
+      const db = b.startDate ? new Date(b.startDate).getTime() : Infinity;
+      if (da !== db) return da - db;
+      return b.totalVolume - a.totalVolume;
+    });
+}
+
+/**
+ * Parse Polymarket's score string format: "000-000|1-0|Bo3"
+ * → { roundScore: [0, 0], seriesScore: [1, 0], bestOf: 3 }
+ */
+function parseScoreString(score) {
+  if (!score || typeof score !== 'string') return null;
+  const parts = score.split('|');
+  if (parts.length < 2) return null;
+  const [roundStr, seriesStr, boStr] = parts;
+  const parsePair = (s) => {
+    const m = s?.match(/(\d+)\s*-\s*(\d+)/);
+    return m ? [parseInt(m[1], 10), parseInt(m[2], 10)] : [0, 0];
+  };
+  const bestOfMatch = boStr?.match(/(\d+)/);
+  return {
+    roundScore:  parsePair(roundStr),
+    seriesScore: parsePair(seriesStr),
+    bestOf: bestOfMatch ? parseInt(bestOfMatch[1], 10) : null,
+  };
 }
 
 // ── Normalisation ────────────────────────────────────────────────────────
@@ -207,16 +255,34 @@ function normaliseEvent(raw, markets) {
   // Detect the market type: match (individual game) vs tournament winner
   const isTournamentWinner = /winner|champion|win the|take the title/i.test(title);
 
+  // Pick the best "when does the match happen" date.
+  // Polymarket's `startDate` is when the market was created (useless),
+  // `eventDate` is the match date (YYYY-MM-DD), `endDate` is resolution.
+  // Prefer eventDate, fall back to endDate.
+  let matchDate = null;
+  if (raw.eventDate) {
+    matchDate = new Date(raw.eventDate + 'T00:00:00Z').toISOString();
+  } else if (raw.endDate) {
+    matchDate = raw.endDate;
+  } else if (raw.startDate) {
+    matchDate = raw.startDate;
+  }
+
   return {
     id: raw.id,
     slug: raw.slug ?? '',
     title,
     isTournamentWinner,
-    startDate: raw.startDate ?? raw.start_date ?? null,
-    endDate: raw.endDate ?? raw.end_date ?? null,
+    startDate: matchDate,
+    endDate: raw.endDate ?? null,
     totalVolume,
     markets,
     image: raw.image ?? null,
+    live: raw.live === true,
+    score: raw.score ?? null,
+    scoreParsed: parseScoreString(raw.score),
+    closed: raw.closed === true,
+    ended: raw.ended === true,
     // Derived fields populated by app.js after enrichment
     pandaMatch: null,
   };

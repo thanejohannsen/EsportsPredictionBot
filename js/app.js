@@ -176,7 +176,7 @@ function scheduleAutoRefresh() {
 
   // Full market data refresh — 5 s on live tab, 15 min on upcoming tab
   const marketInterval = isLive ? cfg.liveRefreshInterval : cfg.refreshInterval;
-  _marketRefreshTimer = setInterval(() => loadData().then(renderCards), marketInterval);
+  _marketRefreshTimer = setInterval(() => loadData(true).then(renderCards), marketInterval);
 
   // 1-second clock: just updates countdown text without any API call
   _clockTimer = setInterval(updateCountdowns, 1_000);
@@ -193,12 +193,15 @@ function updateCountdowns() {
 
 // ── Data Loading ──────────────────────────────────────────────────────────
 
-async function loadData() {
+async function loadData(silent = false) {
   _loading = true;
-  showLoading(true);
+  if (!silent) showLoading(true);
   setRefreshSpinner(true);
 
   try {
+    // Tell polymarket client whether we're in live mode (shorter cache TTL)
+    setLiveMode(cfg.view === 'live');
+
     // Always fetch Polymarket events
     const polyPromise = getEnrichedEvents(cfg.game, 0);   // filter by volume in renderCards
 
@@ -226,7 +229,7 @@ async function loadData() {
     console.error('EsportsPM load error:', err);
   } finally {
     _loading = false;
-    showLoading(false);
+    if (!silent) showLoading(false);
     setRefreshSpinner(false);
   }
 }
@@ -237,18 +240,15 @@ function renderCards() {
   const container = document.getElementById('cards-container');
   if (!container) return;
 
-  let events = filterEvents(_polyEvents);
-
-  // For Live tab: prioritise events with a live PandaScore match, or those
-  // where endDate is within the next 3 hours (likely in progress).
+  // For Live tab: use ev.live directly — ignore volume filter (live games often have low volume)
+  let events;
   if (cfg.view === 'live') {
-    const liveEvents = events.filter(ev =>
-      ev.pandaMatch?.status === 'running' || isLikelyLive(ev)
-    );
-    updateLiveBadge(liveEvents.length);
-    events = liveEvents;
+    events = _polyEvents.filter(isLikelyLive);
+    console.log(`[renderCards] live view: ${events.length} events`);
+    updateLiveBadge(events.length);
   } else {
-    updateLiveBadge(0);
+    events = filterEvents(_polyEvents).filter(ev => !ev.live); // hide live ones from upcoming
+    updateLiveBadge(_polyEvents.filter(isLikelyLive).length);
   }
 
   if (events.length === 0) {
@@ -291,10 +291,8 @@ function filterEvents(events) {
 }
 
 function isLikelyLive(ev) {
-  if (!ev.endDate) return false;
-  const msTillEnd = new Date(ev.endDate) - Date.now();
-  const msFromStart = ev.startDate ? Date.now() - new Date(ev.startDate) : 0;
-  return msTillEnd > 0 && msTillEnd < 4 * 3_600_000 && msFromStart > -1_800_000;
+  // Polymarket sets live=true on events that are actually in progress
+  return ev.live === true && !ev.closed && !ev.ended;
 }
 
 // ── Card Renderers ────────────────────────────────────────────────────────
@@ -415,8 +413,16 @@ function renderLiveCard(ev) {
   const veto = panda ? buildVetoFromPanda(panda) : [];
   const mapAnalysis = analyseMapVeto(veto, t1Name, t2Name);
 
-  // Series score — derived from settled Polymarket map markets
-  const { score1, score2 } = inferSeriesScore(ev.markets, t1Name, t2Name);
+  // Series + round scores — parsed from Polymarket's "000-000|1-0|Bo3" format
+  let score1 = 0, score2 = 0;
+  let round1 = null, round2 = null, bestOf = null;
+  if (ev.scoreParsed) {
+    [score1, score2] = ev.scoreParsed.seriesScore;
+    [round1, round2] = ev.scoreParsed.roundScore;
+    bestOf = ev.scoreParsed.bestOf;
+  } else {
+    ({ score1, score2 } = inferSeriesScore(ev.markets, t1Name, t2Name));
+  }
 
   return `
 <div class="game-card card rounded-2xl overflow-hidden border-l-2 border-brand-red" data-event-id="${ev.id}">
@@ -440,14 +446,16 @@ function renderLiveCard(ev) {
       <div class="flex-1 text-right">
         <div class="font-bold text-base text-slate-100 truncate">${escHtml(t1Name)}</div>
         <div class="text-3xl font-extrabold text-slate-100 mt-1">${score1}</div>
+        ${round1 !== null ? `<div class="text-sm text-brand-cyan font-mono mt-0.5">${round1} rounds</div>` : ''}
       </div>
       <div class="flex flex-col items-center gap-1 w-16 flex-shrink-0">
-        <span class="text-slate-500 text-xs font-semibold uppercase tracking-wider">Maps</span>
+        <span class="text-slate-500 text-xs font-semibold uppercase tracking-wider">Maps${bestOf ? ` (Bo${bestOf})` : ''}</span>
         <span class="text-slate-300 text-sm">:</span>
       </div>
       <div class="flex-1">
         <div class="font-bold text-base text-slate-100 truncate">${escHtml(t2Name)}</div>
         <div class="text-3xl font-extrabold text-slate-100 mt-1">${score2}</div>
+        ${round2 !== null ? `<div class="text-sm text-brand-cyan font-mono mt-0.5">${round2} rounds</div>` : ''}
       </div>
     </div>
   </div>
@@ -659,7 +667,7 @@ function renderMapVeto(mapAnalysis, panda, t1Name, t2Name) {
 }
 
 function renderMapAnalysisNote(mapAnalysis, t1Name, t2Name) {
-  if (!mapAnalysis.picks.length) return '';
+  if (!mapAnalysis?.picks?.length) return '';
 
   const notes = [];
 
